@@ -1,0 +1,354 @@
+(function () { 
+
+    // Constants 
+    var MAX_INT = 9007199254740992; 
+    var MIN_INT = -MAX_INT;
+    var NUMBERS = '0123456789';
+    var CHARS_LOWER = 'abcdefghijklmnopqrstuvwxyz';
+    var CHARS_UPPER = CHARS_LOWER.toUpperCase();
+    var HEX_POOL  = NUMBERS + "abcdef";
+
+    // Errors
+    function UnsupportedError(message) {
+        this.name = 'UnsupportedError';
+        this.message = message || 'This feature is not supported on this platform';
+    }
+
+    UnsupportedError.prototype = new Error();
+    UnsupportedError.prototype.constructor = UnsupportedError;
+
+    // Cached array helpers
+    var slice = Array.prototype.slice;
+
+    // Constructor
+    function Chance (seed) {
+        if (!(this instanceof Chance)) {
+            if (!seed) { seed = null; } // handle other non-truthy seeds, as described in issue #322
+            return seed === null ? new Chance() : new Chance(seed);
+        }
+
+        // if user has provided a function, use that as the generator
+        if (typeof seed === 'function') {
+            this.random = seed;
+            return this;
+        }
+
+        if (arguments.length) {
+            // set a starting value of zero so we can add to it
+            this.seed = 0;
+        }
+
+        // otherwise, leave this.seed blank so that MT will receive a blank
+
+        for (var i = 0; i < arguments.length; i++) {
+            var seedling = 0;
+            if (Object.prototype.toString.call(arguments[i]) === '[object String]') {
+                for (var j = 0; j < arguments[i].length; j++) {
+                    // create a numeric hash for each argument, add to seedling
+                    var hash = 0;
+                    for (var k = 0; k < arguments[i].length; k++) {
+                        hash = arguments[i].charCodeAt(k) + (hash << 6) + (hash << 16) - hash;
+                    }
+                    seedling += hash;
+                }
+            } else {
+                seedling = arguments[i];
+            }
+            this.seed += (arguments.length - i) * seedling;
+        }
+
+        // If no generator function was provided, use our MT
+        this.mt = this.mersenne_twister(this.seed);
+        this.bimd5 = this.blueimp_md5();
+        this.random = function () {
+            return this.mt.random(this.seed);
+        };
+
+        return this;
+    }
+
+    Chance.prototype.VERSION = "1.1.8";
+
+    // Random helper functions
+    function initOptions(options, defaults) {
+        options = options || {};
+
+        if (defaults) {
+            for (var i in defaults) {
+                if (typeof options[i] === 'undefined') {
+                    options[i] = defaults[i];
+                }
+            }
+        }
+
+        return options;
+    }
+
+    function range(size) {
+        return Array.apply(null, Array(size)).map(function (_, i) {return i;});
+    }
+
+    function testRange(test, errorMessage) {
+        if (test) {
+            throw new RangeError(errorMessage);
+        }
+    }
+
+    /**
+     * Encode the input string with Base64.
+     */
+    var base64 = function() {
+        throw new Error('No Base64 encoder available.');
+    };
+
+    // Select proper Base64 encoder.
+    (function determineBase64Encoder() {
+        if (typeof btoa === 'function') {
+            base64 = btoa;
+        } else if (typeof Buffer === 'function') {
+            base64 = function(input) {
+                return new Buffer(input).toString('base64');
+            };
+        }
+    })();
+
+    // -- Basics --
+
+    /**
+     *  Return a random bool, either true or false
+     *
+     *  @param {Object} [options={ likelihood: 50 }] alter the likelihood of
+     *    receiving a true or false value back.
+     *  @throws {RangeError} if the likelihood is out of bounds
+     *  @returns {Bool} either true or false
+     */
+    Chance.prototype.bool = function (options) {
+        // likelihood of success (true)
+        options = initOptions(options, {likelihood : 50});
+
+        // Note, we could get some minor perf optimizations by checking range
+        // prior to initializing defaults, but that makes code a bit messier
+        // and the check more complicated as we have to check existence of
+        // the object then existence of the key before checking constraints.
+        // Since the options initialization should be minor computationally,
+        // decision made for code cleanliness intentionally. This is mentioned
+        // here as it's the first occurrence, will not be mentioned again.
+        testRange(
+            options.likelihood < 0 || options.likelihood > 100,
+            "Chance: Likelihood accepts values from 0 to 100."
+        );
+
+        return this.random() * 100 < options.likelihood;
+    };
+
+    Chance.prototype.falsy = function (options) {
+        // return a random falsy value
+        options = initOptions(options, {pool: [false, null, 0, NaN, '', undefined]})
+        var pool = options.pool,
+            index = this.integer({min: 0, max: pool.length - 1}),
+            value = pool[index];
+
+        return value;
+    }
+
+    Chance.prototype.animal = function (options){
+      //returns a random animal
+      options = initOptions(options);
+
+      if(typeof options.type !== 'undefined'){
+        //if user does not put in a valid animal type, user will get an error
+        testRange(
+           !this.get("animals")[options.type.toLowerCase()],
+           "Please pick from desert, ocean, grassland, forest, zoo, pets, farm."
+         );
+         //if user does put in valid animal type, will return a random animal of that type
+          return this.pick(this.get("animals")[options.type.toLowerCase()]);
+      }
+       //if user does not put in any animal type, will return a random animal regardless
+      var animalTypeArray = ["desert","forest","ocean","zoo","farm","pet","grassland"];
+      return this.pick(this.get("animals")[this.pick(animalTypeArray)]);
+    };
+
+    /**
+     *  Return a random character.
+     *
+     *  @param {Object} [options={}] can specify a character pool or alpha,
+     *    numeric, symbols and casing (lower or upper)
+     *  @returns {String} a single random character
+     */
+    Chance.prototype.character = function (options) {
+        options = initOptions(options);
+
+        var symbols = "!@#$%^&*()[]",
+            letters, pool;
+
+        if (options.casing === 'lower') {
+            letters = CHARS_LOWER;
+        } else if (options.casing === 'upper') {
+            letters = CHARS_UPPER;
+        } else {
+            letters = CHARS_LOWER + CHARS_UPPER;
+        }
+
+        if (options.pool) {
+            pool = options.pool;
+        } else {
+            pool = '';
+            if (options.alpha) {
+                pool += letters;
+            }
+            if (options.numeric) {
+                pool += NUMBERS;
+            }
+            if (options.symbols) {
+                pool += symbols;
+            }
+            if (!pool) {
+                pool = letters + NUMBERS + symbols;
+            }
+        }
+
+        return pool.charAt(this.natural({max: (pool.length - 1)}));
+    };
+
+    // Note, wanted to use "float" or "double" but those are both JS reserved words.
+
+    // Note, fixed means N OR LESS digits after the decimal. This because
+    // It could be 14.9000 but in JavaScript, when this is cast as a number,
+    // the trailing zeroes are dropped. Left to the consumer if trailing zeroes are
+    // needed
+    /**
+     *  Return a random floating point number
+     *
+     *  @param {Object} [options={}] can specify a fixed precision, min, max
+     *  @returns {Number} a single floating point number
+     *  @throws {RangeError} Can only specify fixed or precision, not both. Also
+     *    min cannot be greater than max
+     */
+    Chance.prototype.floating = function (options) {
+        options = initOptions(options, {fixed : 4});
+        testRange(
+            options.fixed && options.precision,
+            "Chance: Cannot specify both fixed and precision."
+        );
+
+        var num;
+        var fixed = Math.pow(10, options.fixed);
+
+        var max = MAX_INT / fixed;
+        var min = -max;
+
+        testRange(
+            options.min && options.fixed && options.min < min,
+            "Chance: Min specified is out of range with fixed. Min should be, at least, " + min
+        );
+        testRange(
+            options.max && options.fixed && options.max > max,
+            "Chance: Max specified is out of range with fixed. Max should be, at most, " + max
+        );
+
+        options = initOptions(options, { min : min, max : max });
+
+        // Todo - Make this work!
+        // options.precision = (typeof options.precision !== "undefined") ? options.precision : false;
+
+        num = this.integer({min: options.min * fixed, max: options.max * fixed});
+        var num_fixed = (num / fixed).toFixed(options.fixed);
+
+        return parseFloat(num_fixed);
+    };
+
+    /**
+     *  Return a random integer
+     *
+     *  NOTE the max and min are INCLUDED in the range. So:
+     *  chance.integer({min: 1, max: 3});
+     *  would return either 1, 2, or 3.
+     *
+     *  @param {Object} [options={}] can specify a min and/or max
+     *  @returns {Number} a single random integer number
+     *  @throws {RangeError} min cannot be greater than max
+     */
+    Chance.prototype.integer = function (options) {
+        // 9007199254740992 (2^53) is the max integer number in JavaScript
+        // See: http://vq.io/132sa2j
+        options = initOptions(options, {min: MIN_INT, max: MAX_INT});
+        testRange(options.min > options.max, "Chance: Min cannot be greater than Max.");
+
+        return Math.floor(this.random() * (options.max - options.min + 1) + options.min);
+    };
+
+    /**
+     *  Return a random natural
+     *
+     *  NOTE the max and min are INCLUDED in the range. So:
+     *  chance.natural({min: 1, max: 3});
+     *  would return either 1, 2, or 3.
+     *
+     *  @param {Object} [options={}] can specify a min and/or max or a numerals count.
+     *  @returns {Number} a single random integer number
+     *  @throws {RangeError} min cannot be greater than max
+     */
+    Chance.prototype.natural = function (options) {
+        options = initOptions(options, {min: 0, max: MAX_INT});
+        if (typeof options.numerals === 'number'){
+          testRange(options.numerals < 1, "Chance: Numerals cannot be less than one.");
+          options.min = Math.pow(10, options.numerals - 1);
+          options.max = Math.pow(10, options.numerals) - 1;
+        }
+        testRange(options.min < 0, "Chance: Min cannot be less than zero.");
+
+        if (options.exclude) {
+            testRange(!Array.isArray(options.exclude), "Chance: exclude must be an array.")
+
+            for (var exclusionIndex in options.exclude) {
+                testRange(!Number.isInteger(options.exclude[exclusionIndex]), "Chance: exclude must be numbers.")
+            }
+
+            var random = options.min + this.natural({max: options.max - options.min - options.exclude.length})
+            var sortedExclusions = options.exclude.sort();
+            for (var sortedExclusionIndex in sortedExclusions) {
+                if (random < sortedExclusions[sortedExclusionIndex]) {
+                    break
+                }
+                random++
+            }
+            return random
+        }
+        return this.integer(options);
+    };
+
+    /**
+     *  Return a random prime number
+     *
+     *  NOTE the max and min are INCLUDED in the range.
+     *
+     *  @param {Object} [options={}] can specify a min and/or max
+     *  @returns {Number} a single random prime number
+     *  @throws {RangeError} min cannot be greater than max nor negative
+     */
+    Chance.prototype.prime = function (options) {
+        options = initOptions(options, {min: 0, max: 10000});
+        testRange(options.min < 0, "Chance: Min cannot be less than zero.");
+        testRange(options.min > options.max, "Chance: Min cannot be greater than Max.");
+
+        var lastPrime = data.primes[data.primes.length - 1];
+        if (options.max > lastPrime) {
+            for (var i = lastPrime + 2; i <= options.max; ++i) {
+                if (this.is_prime(i)) {
+                    data.primes.push(i);
+                }
+            }
+        }
+        var targetPrimes = data.primes.filter(function (prime) {
+            return prime >= options.min && prime <= options.max;
+        });
+        return this.pick(targetPrimes);
+    };
+
+    /**
+     * Determine whether a given number is prime or not.
+     */
+    Chance.prototype.is_prime = function (n) {
+        if (n % 1 || n < 2) {
+            return false;
